@@ -446,8 +446,7 @@ int exec_pipe(char **args, int index)
 	{ 
 		//! Child 1 executing
 		close(fd[0]);
-		dup2(fd[1], STDOUT_FILENO); 
-		close(fd[1]);
+		dup2(fd[1], STDOUT_FILENO);
 		args[index] = NULL;
 
 		if((execvp(args[0], args)) == -1)
@@ -458,7 +457,9 @@ int exec_pipe(char **args, int index)
 		exit(EXIT_SUCCESS);
 	}else 
 	{ 
-		//! Parent executing 
+		close(fd[1]);
+		wait(&status); //! Parent waits for child 1 to terminate 
+
 		p2 = fork(); 
 
 		if(p2 < 0) 
@@ -470,7 +471,6 @@ int exec_pipe(char **args, int index)
 			//! Child 2 executing
 			close(fd[1]);
 			dup2(fd[0], STDIN_FILENO);
-			close(fd[0]);
 
 			//! Variable "piped_arg" containts the arguments after the "|" symbol
 			int j = 0;
@@ -488,9 +488,9 @@ int exec_pipe(char **args, int index)
 			exit(EXIT_SUCCESS); 	
 		}else
 		{ 
-			// Parent waits for children to terminate
-			wait(&status);
-			wait(&status);
+			close(fd[0]);
+			wait(&status); // Parent waits for child 2 to terminate
+
 			if(WIFEXITED(status) && WEXITSTATUS(status) == EXIT_FAILURE)
 				return EXIT_FAILURE;
 			else
