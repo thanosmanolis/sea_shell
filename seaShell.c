@@ -42,6 +42,7 @@ int  exec_pipe			  (char **args, int index);
 *    Check if we are at interactive or at batch mode    *  
 *********************************************************
 */
+
 int main(int argc, char **argv)
 {
 	clear();
@@ -179,21 +180,18 @@ void control_unit(char *input)
 		index = find_pipe_redirect(args); //! Get the index and type of the redirection, or pipe (-1 if none of them exist)
 
 		if(index[0] == 0)
-		{
 			status = exec_redirect(args, index[1]);
-	    }else if(index[0] == 1)
-	    {
+	    else if(index[0] == 1)
 	    	status = exec_pipe(args, index[1]);
-	    }else
-		{
+	    else
 			status = exec_command(args);
-		}
 	}while(commands[i] && (delims[i-1] == 2 || status == EXIT_SUCCESS)); //! Break ony if an argument is wrong, and the next delimeter is "&&"
 
 	free(args);
 	free(commands);
 	free(command);
 	free(delims);
+	free(wrong_delims);
 }
 
 /*
@@ -261,26 +259,9 @@ void check_delims(char *input, int *delims, int *wrong_delims)
 }		
 
 /*
-********************************************************************
-*    Replace back all the "x" with "&" and all tge "y" with ";"    *
-********************************************************************
-*/
-
-void replace_wrong_delims(char *input, int *wrong_delims)
-{
-	for(int z=0; z<sizeof(wrong_delims); z++)
-	{
-		if(input[wrong_delims[z]] == 'x')
-			input[wrong_delims[z]] = '&';
-		else if(input[wrong_delims[z]] == 'y')
-			input[wrong_delims[z]] = ';';
-	}
-}
-
-/*
-****************************************************************
-*    Get the whole input and split it if ";" or "&&" exists    *  
-****************************************************************
+***************************************************************
+*    Get the whole input and split it if ";" or "&" exists    *  
+***************************************************************
 */
 
 int parse_line(char **commands, char *input)
@@ -297,6 +278,23 @@ int parse_line(char **commands, char *input)
 	}while(i < MAX_CMD_NUM);
 
 	return 1;
+}
+
+/*
+***********************************************************************************************
+*    Replace all the "x" with "&" and all the "y" with ";" (back to their original values)    *
+***********************************************************************************************
+*/
+
+void replace_wrong_delims(char *input, int *wrong_delims)
+{
+	for(int z=0; z<sizeof(wrong_delims); z++)
+	{
+		if(input[wrong_delims[z]] == 'x')
+			input[wrong_delims[z]] = '&';
+		else if(input[wrong_delims[z]] == 'y')
+			input[wrong_delims[z]] = ';';
+	}
 }
 
 /*
@@ -393,13 +391,13 @@ int exec_command(char **args)
 	{ 
 		//! Parent waits for child to terminate 
 		wait(&status); 
-		if(WIFEXITED(status) && WEXITSTATUS(status) == EXIT_FAILURE){
+		if(WIFEXITED(status) && WEXITSTATUS(status) == EXIT_FAILURE)
 			return EXIT_FAILURE;
-		}else
-		{
+		else
 			return EXIT_SUCCESS;
-		}
 	} 
+
+	return 0;
 }
 
 /*
@@ -443,7 +441,6 @@ int exec_redirect(char **args, int index)
 			exit(EXIT_FAILURE);
 		}
 		exit(EXIT_SUCCESS);
-		
 	}else
 	{ 
 		//! Parent waits for child to terminate 
@@ -456,14 +453,15 @@ int exec_redirect(char **args, int index)
 }
 
 /*
-******************************************
-*    Execute a command if pipe exists    *  
-******************************************
+*****************************************************************************
+*    Execute a command if pipe exists. This function also implements the    *
+*	 cases where more than one pipes exist, or redirections also exist.     *
+*****************************************************************************
 */
 
 int exec_pipe(char **args, int index)
 {
-	int fd[2], status;
+	int fd[2], status, *next_index;
 	pid_t p1, p2; 
 	char **piped_arg = (char **)malloc(MAX_ARG_NUM*sizeof(char *));
 	char *token;
@@ -492,11 +490,18 @@ int exec_pipe(char **args, int index)
 			fprintf(stderr, "ERROR\n");
 			exit(EXIT_FAILURE);
 		}
-		exit(EXIT_SUCCESS);
 	}else 
 	{ 
 		close(fd[1]);
 		wait(&status); //! Parent waits for child 1 to terminate 
+
+		//! Variable "piped_arg" containts the arguments after the "|" symbol
+		int j = 0;
+		do
+		{
+			token = args[++index];
+			piped_arg[j++] = token;
+		}while(token != NULL);
 
 		p2 = fork(); 
 
@@ -508,22 +513,32 @@ int exec_pipe(char **args, int index)
 		{ 
 			//! Child 2 executing
 			close(fd[1]);
-			dup2(fd[0], STDIN_FILENO);
+			dup2(fd[0], STDIN_FILENO);	
 
-			//! Variable "piped_arg" containts the arguments after the "|" symbol
-			int j = 0;
-			do
-			{
-				token = args[++index];
-				piped_arg[j++] = token;
-			}while(token != NULL);
+			//! Check if there is another pipe or redirect following
+			//! If pipe exists, do exec_pipe with the new array and index
+			//! If redirect exists, do exec_redirect with the new array and index
+			//! If none of them exists, continue with the execution.
+			next_index = find_pipe_redirect(piped_arg);
 
-			if((execvp(piped_arg[0], piped_arg)) == -1)
+			if(next_index[0] == 1)
+			{	
+				close(fd[0]);
+				wait(&status);
+				exec_pipe(piped_arg, next_index[1]);
+			}else if(next_index[0] == 0)
 			{
-				fprintf(stderr, "ERROR\n");
-				exit(EXIT_FAILURE);
+				close(fd[0]);
+				wait(&status);
+				exec_redirect(piped_arg, next_index[1]);
+			}else
+			{
+				if((execvp(piped_arg[0], piped_arg)) == -1)
+				{
+					fprintf(stderr, "ERROR\n");
+					exit(EXIT_FAILURE);
+				}
 			}
-			exit(EXIT_SUCCESS); 	
 		}else
 		{ 
 			close(fd[0]);
@@ -535,4 +550,5 @@ int exec_pipe(char **args, int index)
 				return EXIT_SUCCESS;
 		} 
 	} 
+	exit(EXIT_SUCCESS);
 } 
