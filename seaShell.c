@@ -31,7 +31,8 @@ void control_unit		  (char *input);
 void check_delims         (char *input, int *delims, int *wrong_delims);
 void replace_wrong_delims (char *input, int *wrong_delims);
 int  parse_line			  (char **commands, char *input);
-int  *parse_command		  (char *command, char **args);
+void parse_command		  (char *command, char **args);
+int  *find_pipe_redirect  (char **args);
 int  exec_command		  (char **args);
 int  exec_redirect		  (char **args, int index);
 int  exec_pipe			  (char **args, int index);
@@ -173,24 +174,14 @@ void control_unit(char *input)
 	int *index, status;
 	do
 	{
-		int redirection = 0;
-		int pipe = 0;
+		strcpy(command,commands[i++]); 
+		parse_command(command, args); 	  //! Split each command if spaces exist
+		index = find_pipe_redirect(args); //! Get the index and type of the redirection, or pipe (-1 if none of them exist)
 
-		strcpy(command,commands[i++]); //! Split each command if spaces exist
-
-		index = parse_command(command, args); //! Get the index and type of the redirection, or pipe 
-											  //! (if neither of them exists, its value is -1)
-		
-		//check if pipe or redirection exists
 		if(index[0] == 0)
-			redirection = 1;
-		else if(index[0] == 1)
-			pipe = 1;
-
-		if(redirection == 1)
 		{
 			status = exec_redirect(args, index[1]);
-	    }else if(pipe == 1)
+	    }else if(index[0] == 1)
 	    {
 	    	status = exec_pipe(args, index[1]);
 	    }else
@@ -314,44 +305,62 @@ int parse_line(char **commands, char *input)
 *******************************************************
 */
 
-int *parse_command(char *command, char **args)
+void parse_command(char *command, char **args)
 {
 	const char delim[] = " \n";
 	char *token;
-	int i = 0;
-	
-	int *index = malloc(2*sizeof(int)); //! The first element represents the position, and the second one represents the type 
-	index[0] = -1;						//! -1: no pipe or redirection exists
-	index[1] = -1;						//!  0: redirection exists
-										//!  1: pipe exists				
+	int i = 0;		
 
 	token = strtok(command, delim);
-
+	
 	do
 	{ 
 		args[i++] = token;
 
 		if((i == MAX_ARG_NUM-1)	|| (args[i-1] == '\0'))
 			break;
-		
-		//check if redirection exists
-		if((args[i-1][0] == '<') || (args[i-1][0] == '>'))
-		{
-			index[0] = 0;
-			index[1] = i-1;
-		}
-
-		//check if pipe exists
-		if(args[i-1][0] == '|')
-		{
-			index[0] = 1;
-			index[1] = i-1;
-		}
 
 		token = strtok(NULL, delim); 
 	}while(token != NULL);
 
 	args[i] = NULL;
+}
+
+/*
+***********************************************************
+*    Find pipe or redirection if either of them exists    *  
+***********************************************************
+*/
+
+int *find_pipe_redirect(char **args)
+{	
+	int *index = malloc(2*sizeof(int)); //! The first element represents the position, and the second one represents the type 
+	index[0] = -1;						//! -1: no pipe or redirection exists
+	index[1] = -1;						//!  0: redirection exists
+										//!  1: pipe exists		
+	int i = 0;
+
+	do
+	{ 	
+		if((i == MAX_ARG_NUM-1)	|| (args[i] == '\0'))
+			break;
+
+		//check if redirection exists
+		if((args[i][0] == '<') || (args[i][0] == '>'))
+		{
+			index[0] = 0;
+			index[1] = i;
+			break;
+		}
+
+		//check if pipe exists
+		if(args[i][0] == '|')
+		{
+			index[0] = 1;
+			index[1] = i;
+			break;
+		}
+	}while(args[++i] != NULL);
 
 	return index;
 }
