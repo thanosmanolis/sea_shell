@@ -25,15 +25,16 @@
 #define RESET_COLOR "\033[0m"
 
 //! All functions used
-void interactive_mode	(void);
-void batch_mode			(char **argv);
-void control_unit		(char *input);
-void delims_array       (char *input, int *delims);
-void parse_line			(char **commands, char *input);
-int  *parse_command		(char *command, char **args);
-int  exec_command		(char **args);
-int  exec_redirect		(char **args, int index);
-int  exec_pipe			(char **args, int index);
+void interactive_mode	  (void);
+void batch_mode			  (char **argv);
+void control_unit		  (char *input);
+void check_delims         (char *input, int *delims, int *wrong_delims);
+void replace_wrong_delims (char *input, int *wrong_delims);
+int  parse_line			  (char **commands, char *input);
+int  *parse_command		  (char *command, char **args);
+int  exec_command		  (char **args);
+int  exec_redirect		  (char **args, int index);
+int  exec_pipe			  (char **args, int index);
 
 /*
 *********************************************************
@@ -158,29 +159,23 @@ void batch_mode(char **argv)
 
 void control_unit(char *input)
 {
-	char **commands = (char **)calloc(MAX_CMD_NUM, sizeof(char *));	//! List with all the commands (splitted by ";" or "&&")
-	char  *command 	= (char *)malloc(MAX_CMD_LENGTH*sizeof(char));	//! Array for each command
-	char **args 	= (char **)malloc(MAX_ARG_NUM*sizeof(char *)); 	//! List for the the arguments of each command (splitted by spaces)
-	int   *delims 	= (int *)malloc(MAX_ARG_NUM*sizeof(int)); 		//! Array for delimeters (";" or "&&")
-
-	delims_array(input, delims); //! Fill the array with the delimeters
-	parse_line(commands, input); //! Split input if delimeters exist
-
+	char **commands 	= (char **)calloc(MAX_CMD_NUM, sizeof(char *));	//! List with all the commands (splitted by ";" or "&&")
+	char  *command 		= (char *)malloc(MAX_CMD_LENGTH*sizeof(char));	//! Array for each command
+	char **args 		= (char **)malloc(MAX_ARG_NUM*sizeof(char *)); 	//! List for the the arguments of each command (splitted by spaces)
+	int   *delims 		= (int *)malloc(MAX_ARG_NUM*sizeof(int)); 		//! Array for delimeters (";" or "&&")
+	int   *wrong_delims = (int *)malloc(MAX_CMD_LENGTH*sizeof(int)); 	//! Array for the index of inputs changes from "&" or ";" to "x"
+	
+	check_delims(input, delims, wrong_delims);	   //! Fill the array with the delimeters. Replace "&" with "x" and ";" with "y" 
+	if(parse_line(commands, input))				   //! Split input if delimeters exist
+    	replace_wrong_delims(input, wrong_delims); //! Replace "x" with "&" and "y" with ";"		    
+	
 	int i = 0;
 	int *index, status;
-
 	do
 	{
 		int redirection = 0;
 		int pipe = 0;
 
-		if(delims[i] == -1)
-		{
-			printf("ERROR: Unknown delimeter\n");
-			break;
-		}	
-
-		
 		strcpy(command,commands[i++]); //! Split each command if spaces exist
 
 		index = parse_command(command, args); //! Get the index and type of the redirection, or pipe 
@@ -211,16 +206,17 @@ void control_unit(char *input)
 }
 
 /*
-***************************************************************************
-*    Create an array with the delims, in order to check if less	or more   *
-* 	 than 2 "&" delimeters, or if more than 1 ";" delimeter exist. if     *
-*	 so, an error will occur later.									      *
-***************************************************************************
+***************************************************************************************
+*    Create an array with the right delimeters. Right delimeters are the ones that    * 
+*	 are a single ";" or two "&". If a wrong delimeter exists, change its value to    *
+*	 "x" if it's "&", or to "y" if it's ";" (later they'll be replaced back).         *
+***************************************************************************************
 */
 
-void delims_array(char *input, int * delims)
+void check_delims(char *input, int *delims, int *wrong_delims)
 {
-	int j=0;
+	int j = 0;
+	int y = 0;
 
 	for(int i=0; i<strlen(input)-1; i++)
 	{
@@ -235,11 +231,18 @@ void delims_array(char *input, int * delims)
 			}
 
 			if(index == 1)
+			{
 				delims[j] = 1;
+				j++;
+			}
 			else
-				delims[j] = -1;
-
-			j++;
+			{
+				for(int x=i-index; x<i+1; x++)
+				{
+					input[x] = 'x';
+					wrong_delims[y++] = x;
+				}
+			}			
 		}
 		else if(input[i] == ';')
 		{
@@ -250,14 +253,38 @@ void delims_array(char *input, int * delims)
 			}
 
 			if(index == 0)
-					delims[j] = 2;
-				else
-					delims[j] = -1;
-			
-			j++;
+			{
+				delims[j] = 2;
+				j++;
+			}
+			else
+			{
+				for(int x=i-index; x<i+1; x++)
+				{
+					input[x] = 'y';
+					wrong_delims[y++] = x;
+				}
+			}
 		}
 	}	
-}	
+}		
+
+/*
+********************************************************************
+*    Replace back all the "x" with "&" and all tge "y" with ";"    *
+********************************************************************
+*/
+
+void replace_wrong_delims(char *input, int *wrong_delims)
+{
+	for(int z=0; z<sizeof(wrong_delims); z++)
+	{
+		if(input[wrong_delims[z]] == 'x')
+			input[wrong_delims[z]] = '&';
+		else if(input[wrong_delims[z]] == 'y')
+			input[wrong_delims[z]] = ';';
+	}
+}
 
 /*
 ****************************************************************
@@ -265,7 +292,7 @@ void delims_array(char *input, int * delims)
 ****************************************************************
 */
 
-void parse_line(char **commands, char *input)
+int parse_line(char **commands, char *input)
 {
 	const char delim[] = ";&\n";
 
@@ -277,6 +304,8 @@ void parse_line(char **commands, char *input)
 		if ((commands[i++] = strtok(NULL, delim)) == NULL) 
 			break;
 	}while(i < MAX_CMD_NUM);
+
+	return 1;
 }
 
 /*
