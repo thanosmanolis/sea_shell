@@ -19,9 +19,11 @@
 #define MAX_CMD_LENGTH		128	// max length of each command to be supported 
 
 //! Clearing the shell using escape sequences 
-#define clear() printf("\033[H\033[J") 
+#define clear() printf("\033[H\033[J")
+#define RED "\033[0;31m"
+#define GREEN "\033[0;32m"
 #define GREEN_BOLD "\033[1;32m"
-#define BLUE "\033[0;34m"
+#define YELLOW "\033[0;33m"
 #define RESET_COLOR "\033[0m"
 
 //! All functions used
@@ -32,10 +34,11 @@ void check_delims         (char *input, int *delims, int *wrong_delims);
 void replace_wrong_delims (char *input, int *wrong_delims);
 int  parse_line			  (char **commands, char *input);
 void parse_command		  (char *command, char **args);
-int  *find_pipe_redirect  (char **args);
+int  check_pipe_redirect  (char **args);
 int  exec_command		  (char **args);
-int  exec_redirect		  (char **args, int index);
-int  exec_pipe			  (char **args, int index);
+int  exec_redirect		  (char **args, int state);
+int  exec_pipe			  (char **args);
+void parse_new		      (char **args, char **new_args1, char **new_args2, const char delim[]);
 
 /*
 *********************************************************
@@ -65,11 +68,11 @@ int main(int argc, char **argv)
 
 void interactive_mode(void)
 {
-	printf(BLUE "****************************************\n"
-		   		"**                                    **\n"
-		   		"**    This is a custom shell in c.    **\n"
-		   		"**                                    **\n"
-		   		"****************************************\n\n" RESET_COLOR);
+	printf(GREEN "****************************************\n"
+		   		 "**                                    **\n"
+		   		 "**    This is a custom shell in c.    **\n"
+		   		 "**                                    **\n"
+		   		 "****************************************\n\n" RESET_COLOR);
 
 	char *input_str = (char *)malloc(MAX_INPUT_LENGTH*sizeof(char));
 
@@ -78,15 +81,15 @@ void interactive_mode(void)
 		printf(GREEN_BOLD "manolis_8856> " RESET_COLOR);
 		fgets(input_str, MAX_INPUT_LENGTH, stdin); 
 
-		if(strcmp(input_str, "quit\n") == 0)
+		if(!strcmp(input_str, "quit\n"))
 			break;
-		else if(strcmp(input_str, "\n") == 0)
+		else if(strspn(input_str, " \r\n\t"))
 			continue;
 
 		control_unit(input_str);	
 	}
 
-	printf("\n¯\\_(ツ)_/¯\n\n");
+	printf(YELLOW "\nQuiting... ¯\\_(ツ)_/¯\n\n" RESET_COLOR);
 	free(input_str);
 }
 
@@ -100,11 +103,11 @@ void interactive_mode(void)
 
 void batch_mode(char **argv)
 {
-	printf(BLUE "***********************************************\n"
-		   		"**                                           **\n"
-		   		"**    This is the output of a batch file.    **\n"
-		   		"**                                           **\n"
-		   		"***********************************************\n\n" RESET_COLOR);
+	printf(GREEN "***********************************************\n"
+		   		 "**                                           **\n"
+		   		 "**    This is the output of a batch file.    **\n"
+		   		 "**                                           **\n"
+		   		 "***********************************************" RESET_COLOR "\n");
 
 	size_t len = MAX_INPUT_LENGTH;
 	char *input_str = (char *)malloc(len*sizeof(char));
@@ -124,30 +127,28 @@ void batch_mode(char **argv)
 
 	//! Store each line to the batch_inputs list
 	int i = 0;
+	int j = 0;
 	while(getline(&input_str, &len, fp) != -1) 
-	{		
-		batch_inputs[i++] = strdup(input_str);
-    }
+	{
+		while(input_str[j] == ' ')
+			j++;
+		if(input_str[j] == '#') //! Check if this line is a comment
+			continue;
+
+		if(strspn(input_str, " \r\n\t"))
+			continue;
+		else if(!strncmp(input_str, "quit\n", 4))
+			break;
+		else
+			batch_inputs[i++] = strdup(input_str);
+	}
 
     //! Pass each command to the main control unit
     for(int j=0; j<i; j++)
-    {
-    	if((!strncmp(batch_inputs[j], "\n", 4)))
-			continue;
-		else
-		{
-			printf(GREEN_BOLD "Command: " RESET_COLOR "%s", batch_inputs[j]);
-
-			if(!strncmp(batch_inputs[j], "quit\n", 4))
-				break;
-
-			control_unit(batch_inputs[j]);
-			printf("\n");
-		}
-    }
+		control_unit(batch_inputs[j]);
 
     //! Quiting ... Either by "quit" command or by no more given commands
-    printf("\n¯\\_(ツ)_/¯\n\n");
+    printf(YELLOW "\nQuiting... ¯\\_(ツ)_/¯\n\n" RESET_COLOR);
 	free(batch_inputs);
 	free(input_str);
 	fclose(fp);
@@ -164,28 +165,29 @@ void control_unit(char *input)
 	char **commands 	= (char **)calloc(MAX_CMD_NUM, sizeof(char *));	//! List with all the commands (splitted by ";" or "&&")
 	char  *command 		= (char *)malloc(MAX_CMD_LENGTH*sizeof(char));	//! Array for each command
 	char **args 		= (char **)malloc(MAX_ARG_NUM*sizeof(char *)); 	//! List for the the arguments of each command (splitted by spaces)
-	int   *delims 		= (int *)malloc(MAX_ARG_NUM*sizeof(int)); 		//! Array for delimeters (";" or "&&")
+	int   *delims 		= (int *)malloc(MAX_ARG_NUM*sizeof(int)); 		//! Array for delimiters (";" or "&&")
 	int   *wrong_delims = (int *)malloc(MAX_CMD_LENGTH*sizeof(int)); 	//! Array for the index of inputs changes from "&" or ";" to "x"
 	
-	check_delims(input, delims, wrong_delims);	   //! Fill the array with the delimeters. Replace "&" with "x" and ";" with "y" 
-	if(parse_line(commands, input))				   //! Split input if delimeters exist
+	check_delims(input, delims, wrong_delims);	   //! Fill the array with the delimiters. Replace "&" with "x" and ";" with "y" 
+	if(parse_line(commands, input))				   //! Split input if delimiters exist
     	replace_wrong_delims(input, wrong_delims); //! Replace "x" with "&" and "y" with ";"		    
-	
+
 	int i = 0;
-	int *index, status;
+	int index, status;
+
 	do
 	{
 		strcpy(command,commands[i++]); 
-		parse_command(command, args); 	  //! Split each command if spaces exist
-		index = find_pipe_redirect(args); //! Get the index and type of the redirection, or pipe (-1 if none of them exist)
+		parse_command(command, args);      //! Split each command if spaces exist
+		index = check_pipe_redirect(args); //! (-1: no pipe or redirection exist) | (0: pipe exists) | (1/2: input/output redirection exists)
 
-		if(index[0] == 0)
-			status = exec_redirect(args, index[1]);
-	    else if(index[0] == 1)
-	    	status = exec_pipe(args, index[1]);
+		if(index == 0)
+			status = exec_pipe(args);
+	    else if((index == 1) || (index == 2))
+	    	status = exec_redirect(args, index);
 	    else
 			status = exec_command(args);
-	}while(commands[i] && (delims[i-1] == 2 || status == EXIT_SUCCESS)); //! Break ony if an argument is wrong, and the next delimeter is "&&"
+	}while(commands[i] && (delims[i-1] == 2 || status == EXIT_SUCCESS)); //! If an argument is wrong, break only if the next delimiter is "&&"
 
 	free(args);
 	free(commands);
@@ -196,8 +198,8 @@ void control_unit(char *input)
 
 /*
 ***************************************************************************************
-*    Create an array with the right delimeters. Right delimeters are the ones that    * 
-*	 are a single ";" or two "&". If a wrong delimeter exists, change its value to    *
+*    Create an array with the right delimiters. Right delimiters are the ones that    * 
+*	 are a single ";" or two "&". If a wrong delimiter exists, change its value to    *
 *	 "x" if it's "&", or to "y" if it's ";" (later they'll be replaced back).         *
 ***************************************************************************************
 */
@@ -223,8 +225,7 @@ void check_delims(char *input, int *delims, int *wrong_delims)
 			{
 				delims[j] = 1;
 				j++;
-			}
-			else
+			}else
 			{
 				for(int x=i-index; x<i+1; x++)
 				{
@@ -232,8 +233,7 @@ void check_delims(char *input, int *delims, int *wrong_delims)
 					wrong_delims[y++] = x;
 				}
 			}			
-		}
-		else if(input[i] == ';')
+		}else if(input[i] == ';')
 		{
 			while(input[i+1] == ';')
 			{
@@ -245,8 +245,7 @@ void check_delims(char *input, int *delims, int *wrong_delims)
 			{
 				delims[j] = 2;
 				j++;
-			}
-			else
+			}else
 			{
 				for(int x=i-index; x<i+1; x++)
 				{
@@ -305,7 +304,7 @@ void replace_wrong_delims(char *input, int *wrong_delims)
 
 void parse_command(char *command, char **args)
 {
-	const char delim[] = " \n";
+	const char delim[] = " \r\n\t";
 	char *token;
 	int i = 0;		
 
@@ -325,37 +324,36 @@ void parse_command(char *command, char **args)
 }
 
 /*
-***********************************************************
-*    Find pipe or redirection if either of them exists    *  
-***********************************************************
+*********************************************
+*    Check if pipe or redirection exists    *  
+*********************************************
 */
 
-int *find_pipe_redirect(char **args)
+int check_pipe_redirect(char **args)
 {	
-	int *index = malloc(2*sizeof(int)); //! The first element represents the position, and the second one represents the type 
-	index[0] = -1;						//! -1: no pipe or redirection exists
-	index[1] = -1;						//!  0: redirection exists
-										//!  1: pipe exists		
+	int index = -1; //! (-1: no pipe or redirection exist) | (0: pipe exists) | (1/2: input/output redirection exists)
+	
 	int i = 0;
-
 	do
 	{ 	
 		if((i == MAX_ARG_NUM-1)	|| (args[i] == '\0'))
 			break;
 
-		//check if redirection exists
-		if((args[i][0] == '<') || (args[i][0] == '>'))
+		//! Check if pipe exists
+		if(strchr(args[i], '|'))
 		{
-			index[0] = 0;
-			index[1] = i;
+			index = 0;
 			break;
 		}
 
-		//check if pipe exists
-		if(args[i][0] == '|')
+		//! Check if redirection exists
+		if(strchr(args[i], '<'))
 		{
-			index[0] = 1;
-			index[1] = i;
+			index = 1;
+			break;
+		}else if(strchr(args[i], '>'))
+		{
+			index = 2;
 			break;
 		}
 	}while(args[++i] != NULL);
@@ -383,21 +381,18 @@ int exec_command(char **args)
 		//! Child executing
 		if((execvp(args[0], args)) == -1)
 		{
-			printf("ERROR\n");
+			printf(RED "ERROR: Wrong command\n" RESET_COLOR);
 			exit(EXIT_FAILURE);
 		}
-		exit(EXIT_SUCCESS);
 	}else
 	{ 
 		//! Parent waits for child to terminate 
-		wait(&status); 
-		if(WIFEXITED(status) && WEXITSTATUS(status) == EXIT_FAILURE)
-			return EXIT_FAILURE;
-		else
-			return EXIT_SUCCESS;
-	} 
+		wait(&status);
 
-	return 0;
+		if(status != 0)
+			return EXIT_FAILURE;
+	}
+	return EXIT_SUCCESS;
 }
 
 /*
@@ -406,10 +401,12 @@ int exec_command(char **args)
 *************************************************
 */
 
-int exec_redirect(char **args, int index)
+int exec_redirect(char **args, int state)
 {
 	pid_t pid = fork(); 
 	int fd_in, fd_out, status;
+	char **redirected_args1 = (char **)malloc(MAX_ARG_NUM*sizeof(char *));
+	char **redirected_args2 = (char **)malloc(MAX_ARG_NUM*sizeof(char *));
 
 	if(pid < 0)
 	{ 
@@ -417,39 +414,41 @@ int exec_redirect(char **args, int index)
 		return EXIT_FAILURE;
 	}else if(pid == 0)
 	{ 
-		if(args[index][0] == '>')
+		if(state == 1)
 		{
-			//! Child process: stdout redirection
-			fd_out = creat(args[index + 1], 0644);			
-			close(1);
-			dup(fd_out);
-			close(fd_out);
-			args[index] = NULL;
-		}else
-		{
-			//! Child process: stdin redirection	
-			fd_in = open(args[index + 1], O_RDONLY, 0);
+			//! Child process: stdin redirection
+			parse_new(args, redirected_args1, redirected_args2, "<\n");	
+			fd_in = open(redirected_args2[0], O_RDONLY, 0);
         	close(0);
 			dup(fd_in);
 			close(fd_in);
-			args[index] = NULL;
+		}else
+		{
+			//! Child process: stdout redirection
+			parse_new(args, redirected_args1, redirected_args2, ">\n");
+			fd_out = creat(redirected_args2[0], 0644);			
+			close(1);
+			dup(fd_out);
+			close(fd_out);
 		}
 
-		if((execvp(args[0], args)) == -1)
+		if((execvp(redirected_args1[0], redirected_args1)) == -1)
 		{
-			fprintf(stderr, "ERROR\n");
+			fprintf(stderr, RED "ERROR: Wrong command\n" RESET_COLOR);
 			exit(EXIT_FAILURE);
 		}
-		exit(EXIT_SUCCESS);
 	}else
 	{ 
 		//! Parent waits for child to terminate 
 		wait(&status); 
-		if(WIFEXITED(status) && WEXITSTATUS(status) == EXIT_FAILURE)
+
+		free(redirected_args1);
+		free(redirected_args2);
+
+		if(status != 0)
 			return EXIT_FAILURE;
-		else
-			return EXIT_SUCCESS;
 	}
+	return EXIT_SUCCESS;
 }
 
 /*
@@ -459,12 +458,14 @@ int exec_redirect(char **args, int index)
 *****************************************************************************
 */
 
-int exec_pipe(char **args, int index)
+int exec_pipe(char **args)
 {
-	int fd[2], status, *next_index;
+	int fd[2], status, next_index;
 	pid_t p1, p2; 
-	char **piped_arg = (char **)malloc(MAX_ARG_NUM*sizeof(char *));
-	char *token;
+	char **piped_args1 = (char **)malloc(MAX_ARG_NUM*sizeof(char *));
+	char **piped_args2 = (char **)malloc(MAX_ARG_NUM*sizeof(char *));
+
+	parse_new(args, piped_args1, piped_args2, "|\n");
 
 	if(pipe(fd) < 0) 
 	{ 
@@ -483,25 +484,16 @@ int exec_pipe(char **args, int index)
 		//! Child 1 executing
 		close(fd[0]);
 		dup2(fd[1], STDOUT_FILENO);
-		args[index] = NULL;
 
-		if((execvp(args[0], args)) == -1)
+		if((execvp(piped_args1[0], piped_args1)) == -1)
 		{
-			fprintf(stderr, "ERROR\n");
+			fprintf(stderr, RED "ERROR: Wrong command\n" RESET_COLOR);
 			exit(EXIT_FAILURE);
 		}
 	}else 
 	{ 
 		close(fd[1]);
 		wait(&status); //! Parent waits for child 1 to terminate 
-
-		//! Variable "piped_arg" containts the arguments after the "|" symbol
-		int j = 0;
-		do
-		{
-			token = args[++index];
-			piped_arg[j++] = token;
-		}while(token != NULL);
 
 		p2 = fork(); 
 
@@ -516,39 +508,106 @@ int exec_pipe(char **args, int index)
 			dup2(fd[0], STDIN_FILENO);	
 
 			//! Check if there is another pipe or redirect following
-			//! If pipe exists, do exec_pipe with the new array and index
+			//! If pipe exists, do exec_pipe with the new array
 			//! If redirect exists, do exec_redirect with the new array and index
 			//! If none of them exists, continue with the execution.
-			next_index = find_pipe_redirect(piped_arg);
+			next_index = check_pipe_redirect(piped_args2);
 
-			if(next_index[0] == 1)
+			if(next_index == 0)
 			{	
 				close(fd[0]);
 				wait(&status);
-				exec_pipe(piped_arg, next_index[1]);
-			}else if(next_index[0] == 0)
+				exec_pipe(piped_args2);
+				exit(EXIT_SUCCESS);
+			}else if((next_index == 1) || (next_index == 2))
 			{
 				close(fd[0]);
 				wait(&status);
-				exec_redirect(piped_arg, next_index[1]);
+				exec_redirect(piped_args2, next_index);
+				exit(EXIT_SUCCESS);
 			}else
 			{
-				if((execvp(piped_arg[0], piped_arg)) == -1)
+				if((execvp(piped_args2[0], piped_args2)) == -1)
 				{
-					fprintf(stderr, "ERROR\n");
+					fprintf(stderr, RED "ERROR: Wrong command\n" RESET_COLOR);
 					exit(EXIT_FAILURE);
 				}
 			}
 		}else
 		{ 
 			close(fd[0]);
-			wait(&status); // Parent waits for child 2 to terminate
+			wait(&status); //! Parent waits for child 2 to terminate
 
-			if(WIFEXITED(status) && WEXITSTATUS(status) == EXIT_FAILURE)
+			free(piped_args1);
+			free(piped_args2);
+
+			if(status != 0)
 				return EXIT_FAILURE;
-			else
-				return EXIT_SUCCESS;
 		} 
-	} 
-	exit(EXIT_SUCCESS);
+	}
+	return EXIT_SUCCESS;
 } 
+
+/*
+***************************************************************************
+*    Take the arguments that were previously splitted to spaces. Split    *
+*	 them again, but this time according to the new delimiter (|,>,<).    *
+*    Store them in 2 new arrays (before and after the delimiter)		  *
+***************************************************************************
+*/
+
+void parse_new(char **args, char **new_args1, char **new_args2, const char delim[])
+{
+	int state;
+	char *token;
+	int i = 0;		
+	int j = 0;
+
+	//! As long as there is no delimiter, just copy the exact same value
+	while(!strchr(args[j], '|') && !strchr(args[j], '>') && !strchr(args[j], '<'))
+		new_args1[i++] = args[j++]; 
+
+	//! Create the array on the left of the delimiter
+	token = strtok(args[j], delim);
+	do
+	{
+		if((strcmp(args[j], "|") == 0) || (strcmp(args[j], ">") == 0) || (strcmp(args[j], "<") == 0))
+		{
+			state = 0;
+			break;
+		}else
+		{
+			if(args[j][0] == '|' || args[j][0] == '>' || args[j][0] == '<')
+				break;
+			else if(token == NULL)
+			{
+				token = args[++j];
+				break;
+			}
+
+			state = 1;
+			new_args1[i++] = token;			
+		}
+		
+		token = strtok(NULL, delim);
+	}while(token == NULL);
+
+	new_args1[i] = NULL;
+
+	//! Create the array on the right of the delimiter
+	if(state == 0)
+	{
+		new_args2[0] = args[++j];
+		j++;
+	}else
+	{
+		new_args2[0] = token;
+		j++;
+	}
+
+	i = 1;
+
+	do
+		new_args2[i++] = args[j++];
+	while(args[j-1] != NULL);
+}
