@@ -29,7 +29,7 @@
 //! All functions used
 void interactive_mode	  (void);
 void batch_mode			  (char **argv);
-void control_unit		  (char *input);
+int  control_unit		  (char *input);
 void check_delims         (char *input, int *delims, int *wrong_delims);
 void replace_wrong_delims (char *input, int *wrong_delims);
 int  parse_line			  (char **commands, char *input);
@@ -75,19 +75,18 @@ void interactive_mode(void)
 		   		 "****************************************\n\n" RESET_COLOR);
 
 	char *input_str = (char *)malloc(MAX_INPUT_LENGTH*sizeof(char));
+	int quit_status;
 
-	while(1)
+	do
 	{
 		printf(GREEN_BOLD "manolis_8856> " RESET_COLOR);
-		fgets(input_str, MAX_INPUT_LENGTH, stdin); 
+		fgets(input_str, MAX_INPUT_LENGTH, stdin);
 
-		if(!strcmp(input_str, "quit\n"))
-			break;
-		else if(strspn(input_str, " \r\n\t"))
+		if(strlen(input_str) == strspn(input_str, " \r\n\t"))
 			continue;
 
-		control_unit(input_str);	
-	}
+		quit_status = control_unit(input_str);	
+	}while(!quit_status);
 
 	printf(YELLOW "\nQuiting... ¯\\_(ツ)_/¯\n\n" RESET_COLOR);
 	free(input_str);
@@ -126,26 +125,32 @@ void batch_mode(char **argv)
 	}	
 
 	//! Store each line to the batch_inputs list
-	int i = 0;
-	int j = 0;
+	int i = 0, file_is_empty = 1;
 	while(getline(&input_str, &len, fp) != -1) 
 	{
+		int j = 0;
 		while(input_str[j] == ' ')
 			j++;
 		if(input_str[j] == '#') //! Check if this line is a comment
 			continue;
 
-		if(strspn(input_str, " \r\n\t"))
+		if(strlen(input_str) == strspn(input_str, " \r\n\t"))
 			continue;
-		else if(!strncmp(input_str, "quit\n", 4))
-			break;
 		else
+		{
+			file_is_empty = 0;
 			batch_inputs[i++] = strdup(input_str);
+		}
 	}
 
+	if(file_is_empty == 1)
+		printf(YELLOW "\nFile is empty!\n" RESET_COLOR);
+
     //! Pass each command to the main control unit
-    for(int j=0; j<i; j++)
-		control_unit(batch_inputs[j]);
+    int quit_status;
+    int j = 0;
+    while((j < i) && !quit_status)
+		quit_status = control_unit(batch_inputs[j++]);
 
     //! Quiting ... Either by "quit" command or by no more given commands
     printf(YELLOW "\nQuiting... ¯\\_(ツ)_/¯\n\n" RESET_COLOR);
@@ -160,7 +165,7 @@ void batch_mode(char **argv)
 ***************************************
 */
 
-void control_unit(char *input)
+int control_unit(char *input)
 {
 	char **commands 	= (char **)calloc(MAX_CMD_NUM, sizeof(char *));	//! List with all the commands (splitted by ";" or "&&")
 	char  *command 		= (char *)malloc(MAX_CMD_LENGTH*sizeof(char));	//! Array for each command
@@ -173,27 +178,35 @@ void control_unit(char *input)
     	replace_wrong_delims(input, wrong_delims); //! Replace "x" with "&" and "y" with ";"		    
 
 	int i = 0;
-	int index, status;
+	int index, status, quit_status = 0;
 
 	do
-	{
+	{	
 		strcpy(command,commands[i++]); 
-		parse_command(command, args);      //! Split each command if spaces exist
+		parse_command(command, args);      //! Split each command if spaces exist				
+
 		index = check_pipe_redirect(args); //! (-1: no pipe or redirection exist) | (0: pipe exists) | (1/2: input/output redirection exists)
 
-		if(index == 0)
-			status = exec_pipe(args);
-	    else if((index == 1) || (index == 2))
-	    	status = exec_redirect(args, index);
-	    else
-			status = exec_command(args);
-	}while(commands[i] && (delims[i-1] == 2 || status == EXIT_SUCCESS)); //! If an argument is wrong, break only if the next delimiter is "&&"
+		if(!strcmp(args[0], "quit") && (args[1] == NULL)) //! Check if command is quit
+			quit_status = 1;
+		else
+		{
+			if(index == 0)
+				status = exec_pipe(args);
+		    else if((index == 1) || (index == 2))
+		    	status = exec_redirect(args, index);
+		    else
+				status = exec_command(args);
+		}
+	}while(commands[i] && !quit_status && (delims[i-1] == 2 || status == EXIT_SUCCESS)); //! If an argument is wrong, break only if the next delimiter is "&&"
 
 	free(args);
 	free(commands);
 	free(command);
 	free(delims);
 	free(wrong_delims);
+
+	return quit_status;
 }
 
 /*
@@ -379,18 +392,17 @@ int exec_command(char **args)
 	}else if(pid == 0)
 	{ 
 		//! Child executing
-		if((execvp(args[0], args)) == -1)
-		{
-			printf(RED "ERROR: Wrong command\n" RESET_COLOR);
+		if((execvp(args[0], args)) < 0)
 			exit(EXIT_FAILURE);
-		}
 	}else
 	{ 
 		//! Parent waits for child to terminate 
 		wait(&status);
-
 		if(status != 0)
+		{
+			printf(RED "ERROR" RESET_COLOR "\n");
 			return EXIT_FAILURE;
+		}
 	}
 	return EXIT_SUCCESS;
 }
@@ -432,21 +444,21 @@ int exec_redirect(char **args, int state)
 			close(fd_out);
 		}
 
-		if((execvp(redirected_args1[0], redirected_args1)) == -1)
-		{
-			fprintf(stderr, RED "ERROR: Wrong command\n" RESET_COLOR);
+		if((execvp(redirected_args1[0], redirected_args1)) < 0)
 			exit(EXIT_FAILURE);
-		}
 	}else
 	{ 
 		//! Parent waits for child to terminate 
-		wait(&status); 
+		wait(&status);
 
 		free(redirected_args1);
 		free(redirected_args2);
 
 		if(status != 0)
+		{
+			printf(RED "ERROR" RESET_COLOR "\n");
 			return EXIT_FAILURE;
+		}
 	}
 	return EXIT_SUCCESS;
 }
@@ -460,7 +472,7 @@ int exec_redirect(char **args, int state)
 
 int exec_pipe(char **args)
 {
-	int fd[2], status, next_index;
+	int fd[2], status1, status2, next_state;
 	pid_t p1, p2; 
 	char **piped_args1 = (char **)malloc(MAX_ARG_NUM*sizeof(char *));
 	char **piped_args2 = (char **)malloc(MAX_ARG_NUM*sizeof(char *));
@@ -485,15 +497,15 @@ int exec_pipe(char **args)
 		close(fd[0]);
 		dup2(fd[1], STDOUT_FILENO);
 
-		if((execvp(piped_args1[0], piped_args1)) == -1)
-		{
-			fprintf(stderr, RED "ERROR: Wrong command\n" RESET_COLOR);
+		if((execvp(piped_args1[0], piped_args1)) < 0)
 			exit(EXIT_FAILURE);
-		}
 	}else 
 	{ 
 		close(fd[1]);
-		wait(&status); //! Parent waits for child 1 to terminate 
+		wait(&status1); //! Parent waits for child 1 to terminate 
+
+		if(status1 != 0)
+			printf(RED "ERROR" RESET_COLOR "\n");
 
 		p2 = fork(); 
 
@@ -511,38 +523,34 @@ int exec_pipe(char **args)
 			//! If pipe exists, do exec_pipe with the new array
 			//! If redirect exists, do exec_redirect with the new array and index
 			//! If none of them exists, continue with the execution.
-			next_index = check_pipe_redirect(piped_args2);
+			next_state = check_pipe_redirect(piped_args2);
 
-			if(next_index == 0)
+			if(next_state == 0)
 			{	
 				close(fd[0]);
-				wait(&status);
 				exec_pipe(piped_args2);
 				exit(EXIT_SUCCESS);
-			}else if((next_index == 1) || (next_index == 2))
+			}else if((next_state == 1) || (next_state == 2))
 			{
 				close(fd[0]);
-				wait(&status);
-				exec_redirect(piped_args2, next_index);
+				exec_redirect(piped_args2, next_state);
 				exit(EXIT_SUCCESS);
 			}else
-			{
-				if((execvp(piped_args2[0], piped_args2)) == -1)
-				{
-					fprintf(stderr, RED "ERROR: Wrong command\n" RESET_COLOR);
+				if((execvp(piped_args2[0], piped_args2)) < 0)
 					exit(EXIT_FAILURE);
-				}
-			}
 		}else
 		{ 
 			close(fd[0]);
-			wait(&status); //! Parent waits for child 2 to terminate
+			wait(&status2); //! Parent waits for child 2 to terminate
 
 			free(piped_args1);
 			free(piped_args2);
 
-			if(status != 0)
+			if(status2 != 0)
+			{
+				printf(RED "ERROR" RESET_COLOR "\n");
 				return EXIT_FAILURE;
+			}
 		} 
 	}
 	return EXIT_SUCCESS;
