@@ -30,8 +30,8 @@
 void interactive_mode	  (void);
 void batch_mode			  (char **argv);
 int  control_unit		  (char *input);
-void check_delims         (char *input, int *delims, int *wrong_delims);
-void replace_wrong_delims (char *input, int *wrong_delims);
+int  check_delims         (char *input, int *delims, int *wrong_delims);
+void replace_wrong_delims (char *input, int *wrong_delims, int size);
 int  parse_line			  (char **commands, char *input);
 void parse_command		  (char *command, char **args);
 int  check_pipe_redirect  (char **args);
@@ -75,7 +75,7 @@ void interactive_mode(void)
 		   		 "****************************************\n\n" RESET_COLOR);
 
 	char *input_str = (char *)malloc(MAX_INPUT_LENGTH*sizeof(char));
-	int quit_status;
+	int quit_status = 0;
 
 	do
 	{
@@ -147,7 +147,7 @@ void batch_mode(char **argv)
 		printf(YELLOW "\nFile is empty!\n" RESET_COLOR);
 
     //! Pass each command to the main control unit
-    int quit_status;
+    int quit_status = 0;
     int j = 0;
     while((j < i) && !quit_status)
 		quit_status = control_unit(batch_inputs[j++]);
@@ -172,10 +172,11 @@ int control_unit(char *input)
 	char **args 		= (char **)malloc(MAX_ARG_NUM*sizeof(char *)); 	//! List for the the arguments of each command (splitted by spaces)
 	int   *delims 		= (int *)malloc(MAX_ARG_NUM*sizeof(int)); 		//! Array for delimiters (";" or "&&")
 	int   *wrong_delims = (int *)malloc(MAX_CMD_LENGTH*sizeof(int)); 	//! Array for the index of inputs changes from "&" or ";" to "x"
-	
-	check_delims(input, delims, wrong_delims);	   //! Fill the array with the delimiters. Replace "&" with "x" and ";" with "y" 
-	if(parse_line(commands, input))				   //! Split input if delimiters exist
-    	replace_wrong_delims(input, wrong_delims); //! Replace "x" with "&" and "y" with ";"		    
+	int    size;
+
+	size = check_delims(input, delims, wrong_delims);	 //! Fill the array with the delimiters. Replace "&" with "x" and ";" with "y" 
+	if(parse_line(commands, input))				   		 //! Split input if delimiters exist
+    	replace_wrong_delims(input, wrong_delims, size); //! Replace "x" with "&" and "y" with ";"		    
 
 	int i = 0;
 	int index, status, quit_status = 0;
@@ -217,7 +218,7 @@ int control_unit(char *input)
 ***************************************************************************************
 */
 
-void check_delims(char *input, int *delims, int *wrong_delims)
+int check_delims(char *input, int *delims, int *wrong_delims)
 {
 	int j = 0;
 	int y = 0;
@@ -268,6 +269,8 @@ void check_delims(char *input, int *delims, int *wrong_delims)
 			}
 		}
 	}	
+
+	return y;
 }		
 
 /*
@@ -298,9 +301,9 @@ int parse_line(char **commands, char *input)
 ***********************************************************************************************
 */
 
-void replace_wrong_delims(char *input, int *wrong_delims)
+void replace_wrong_delims(char *input, int *wrong_delims, int size)
 {
-	for(int z=0; z<sizeof(wrong_delims); z++)
+	for(int z=0; z<size; z++)
 	{
 		if(input[wrong_delims[z]] == 'x')
 			input[wrong_delims[z]] = '&';
